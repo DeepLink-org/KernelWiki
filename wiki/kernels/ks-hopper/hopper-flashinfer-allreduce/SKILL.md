@@ -1,6 +1,19 @@
 ---
 name: hopper-flashinfer-allreduce
 description: 从 NVIDIA Hopper 模型推理 Profiler 中识别高频、小 payload、暴露在 decode 关键路径上的 AllReduce 模式，并配置、实现或评审 FlashInfer MNNVL 显式优化，包括阈值分流、路由、安全回退和 A/B 验证。不要用于非 Hopper 平台、大 payload 主导或已经充分隐藏的通信。
+metadata:
+  short-description: Hopper 推理中高频小消息 FlashInfer AllReduce 模式匹配与优化
+  id: kernel-hopper-flashinfer-allreduce
+  title: FlashInfer MNNVL AllReduce for Hopper inference
+  type: kernel
+  architectures: [sm90]
+  tags: [decode, reduction, communication-overlap]
+  confidence: experimental
+  reproducibility: benchmarked
+  kernel_types: [reduction, decode]
+  languages: [cuda-cpp, python]
+  related: []
+  sources: []
 ---
 
 # Hopper FlashInfer AllReduce
