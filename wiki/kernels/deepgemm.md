@@ -8,7 +8,7 @@ confidence: source-reported
 reproducibility: snippet
 kernel_types: [gemm, grouped-gemm]
 languages: [cuda-cpp]
-related: [technique-fine-grained-quantization, hw-tcgen05-mma, hw-nvfp4, kernel-grouped-gemm]
+related: [technique-fine-grained-quantization, hw-tcgen05-mma, hw-nvfp4, kernel-grouped-gemm, kernel-small-m-m-grouped-gemm]
 sources: [blog-deepgemm, pr-DeepGEMM-304]
 performance_claims:
   - gpu: H800
