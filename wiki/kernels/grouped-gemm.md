@@ -8,7 +8,7 @@ confidence: source-reported
 reproducibility: snippet
 kernel_types: [grouped-gemm, gemm, moe]
 languages: [cuda-cpp]
-related: [kernel-fused-moe, kernel-deepgemm, technique-persistent-kernels, technique-tile-scheduling]
+related: [kernel-fused-moe, kernel-deepgemm, kernel-small-m-m-grouped-gemm, technique-persistent-kernels, technique-tile-scheduling]
 sources: [contest-gpumode-p4, blog-deepgemm, pr-DeepGEMM-304, blog-gpu-mode-reward-hack]
 performance_claims: []
 blackwell_relevance: SM100 implementations can use native block-scaled MMA and either static persistence or CLC-assisted work acquisition; the scheduler is an implementation choice.
@@ -61,6 +61,10 @@ Correctness tests should cover empty experts, nonuniform row counts, padding,
 scale layouts, output offsets, and both architecture dispatch branches. Measure
 the whole routed workload; a grouped kernel can reduce launch overhead while
 remaining dominated by thin expert GEMMs.
+
+For an evidence-bounded SM90 small-M workflow covering layout contracts,
+tile/wave cost, group-aware scheduling, B traffic, and acceptance gates,
+see [small-M M-grouped GEMM](small-m-m-grouped-gemm.md).
 
 ## Benchmark boundary
 

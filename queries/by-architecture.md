@@ -1572,6 +1572,7 @@ Source-PR pages whose validated evidence review found no family-level or exact a
 | [Gated Delta Network kernels](../wiki/kernels/gated-delta-net.md) | `wiki/kernels/gated-delta-net.md` |
 | [Gated Dual GEMM (Gate-Up + Activation)](../wiki/kernels/gated-dual-gemm.md) | `wiki/kernels/gated-dual-gemm.md` |
 | [Grouped GEMM for MoE](../wiki/kernels/grouped-gemm.md) | `wiki/kernels/grouped-gemm.md` |
+| [Small-M M-grouped GEMM on SM90](../wiki/kernels/small-m-m-grouped-gemm.md) | `wiki/kernels/small-m-m-grouped-gemm.md` |
 | [Sparse MLA](../wiki/kernels/sparse-mla.md) | `wiki/kernels/sparse-mla.md` |
 | [Triton on Blackwell](../wiki/languages/triton-blackwell.md) | `wiki/languages/triton-blackwell.md` |
 | [PTX Cache Policy Differentiation](../wiki/techniques/cache-policy.md) | `wiki/techniques/cache-policy.md` |

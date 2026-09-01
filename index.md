@@ -59,6 +59,7 @@ See [references/examples.md](references/examples.md) for 10 worked query pattern
 - [kernel-nvfp4-gemm](wiki/kernels/nvfp4-gemm.md) — NVFP4 GEMM from GPU Mode hackathon
 - [kernel-nvfp4-gemv](wiki/kernels/nvfp4-gemv.md) — NVFP4 batched GEMV optimization
 - [kernel-grouped-gemm](wiki/kernels/grouped-gemm.md) — Grouped GEMM for MoE
+- [kernel-small-m-m-grouped-gemm](wiki/kernels/small-m-m-grouped-gemm.md) — Small-M compact/ragged M-grouped GEMM optimization playbook
 - [kernel-fused-moe](wiki/kernels/fused-moe.md) — Fused MoE with FP8
 
 ## Problem → Solution Patterns
