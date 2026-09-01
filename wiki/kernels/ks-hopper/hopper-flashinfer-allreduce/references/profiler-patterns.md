@@ -13,7 +13,7 @@
 - AllReduce kernel 名、调用次数、累计 GPU 时间、p50/p95 单次时长；
 - 每类调用的 shape、dtype、element size、payload bytes、contiguous；
 - kernel 前后依赖、stream、同步点和与计算的 overlap；
-- vLLM、FlashInfer、CUDA 版本及 AllReduce 配置。
+- 推理框架、FlashInfer、CUDA 版本及 AllReduce 配置。
 
 payload 统一按 `numel × element_size` 计算；二维 `[tokens, hidden_size]` 可写为 `tokens × hidden_size × element_size`。不要只用 token 数判断阈值。
 
@@ -27,7 +27,7 @@ payload 统一按 `numel × element_size` 计算；二维 `[tokens, hidden_size]
 - 单次耗时较短，但调用数高、累计占比不可忽略；
 - 多数目标 shape 为 contiguous 2-D FP16/BF16/FP32；
 - payload 集中在小消息区间，且与计算串行或 overlap 很少；
-- baseline 常见 `multimem_all_reduce_kernel`、vLLM custom AllReduce 或其他 fallback kernel。
+- baseline 常见 `multimem_all_reduce_kernel`、框架自定义 AllReduce 或其他 fallback kernel。
 
 匹配结论：`MATCH`。优先评估 FlashInfer MNNVL 小消息路径，并以 payload 阈值局部接管。
 
@@ -42,7 +42,7 @@ payload 统一按 `numel × element_size` 计算；二维 `[tokens, hidden_size]
 - trace 中 `trtllm_mnnvl_allreduce::oneshotAllreduceFusionKernel` 为 0 或明显少于预期；
 - 同一批张量仍由 symmetric-memory/custom AllReduce 消费。
 
-匹配结论：`MATCH`。检查 standalone 是否读取 pass config，以及 FlashInfer eligibility 是否排在 symmetric-memory 之前。
+匹配结论：`MATCH`。检查 standalone 与 fused 路径是否读取同一有效阈值，以及 FlashInfer eligibility 是否排在通用节点内路径之前。
 
 原理：配置存在不等于路由生效；如果两个路径阈值不一致，或 fallback 更早返回，专用 kernel 永远不会执行。
 

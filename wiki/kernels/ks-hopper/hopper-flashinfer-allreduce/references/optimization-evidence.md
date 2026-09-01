@@ -1,29 +1,25 @@
 # FlashInfer AllReduce 实现与效果基线
 
-## 实现范围
+## 可复用实现模式
 
-经验实现涉及以下模块：
+不要按历史文件路径寻找修改点。先在当前推理框架中沿 AllReduce 调用链识别四类职责，再把优化规则映射到对应职责：
 
-- `vllm/distributed/device_communicators/flashinfer_all_reduce.py`
-- `vllm/distributed/device_communicators/cuda_communicator.py`
-- `tests/distributed/test_comm_ops.py`
+1. **容量计算**：MiB、workspace 与 max token 计算保持整数，兼容小数 MiB 阈值。
+2. **配置传播**：fused 与 standalone 路径读取同一 payload 上限；配置必须在通信器或执行图初始化前生效。
+3. **资格判断**：仅让 CUDA、contiguous、2-D、受支持 dtype 且阈值内的张量进入专用路径。
+4. **路由与回退**：显式启用的 eligible FlashInfer 优先于通用节点内路径；其他输入继续使用原有 backend。
 
-核心改动：
+在新代码库中，可搜索 AllReduce 入口、backend 选择、workspace 初始化、payload 阈值与 fallback 分支来定位这些职责，但不要假设固定目录、类名或配置字段。
 
-1. MiB、workspace 与 max token 计算保持整数，兼容 1.5 MiB 等小数阈值。
-2. standalone FlashInfer AllReduce 读取 `compilation_config.pass_config.fi_allreduce_fusion_max_size_mb`。
-3. CUDA、contiguous、2-D、FP16/BF16/FP32 且阈值内的张量才 eligible。
-4. 显式启用的 eligible FlashInfer 路由优先于 symmetric-memory，其余安全回退。
-
-## 原始缺陷
+## 常见失效模式
 
 - float token 数进入 FlashInfer workspace API 后可能触发 `TypeError: unsupported operand type(s) for &: 'float' and 'int'`。
-- fusion pass 与 standalone 路径可能使用不同阈值。
-- 即使 `VLLM_ALLREDUCE_USE_FLASHINFER=1`，符合条件的张量也可能先被 symmetric-memory 消费。
+- fused 与 standalone 路径可能使用不同阈值或不同配置生命周期。
+- 即使用户显式选择 FlashInfer，符合条件的张量也可能被更早的通用路由消费。
 
-## 已验证结果
+## 已观测效果
 
-静态与单元测试：14 passed、14 deselected；`py_compile` 与 `git diff --check` 通过。
+实现验证应覆盖小数阈值整数化、payload 边界、支持与不支持输入、专用路由优先级及所有 fallback。以下数据仅用于说明该模式曾产生的效果量级，不作为新环境的验收承诺。
 
 单机 8×H200、TP8、hidden size 7168、BF16，warmup 100、measure 500 的单算子中位数：
 
@@ -48,6 +44,6 @@
 
 ## 经验复用原则
 
-- 把代码提交和实验轮次视为知识来源，不把它们写入 Skill 的对外命名与触发条件。
+- 把历史实现和实验记录视为知识来源，不把具体代码布局或实验编号写入 Skill 的触发条件。
 - 复用实现不变量、验证流程和结论边界；具体性能数字只作为已观测效果，不作为验收承诺。
 - 换 GPU 拓扑、模型、shape、并发、版本或阈值后，重新建立 baseline 并做交替顺序 paired A/B。

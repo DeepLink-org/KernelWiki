@@ -1,6 +1,6 @@
 ---
 name: hopper-flashinfer-allreduce
-description: 从 NVIDIA Hopper 模型推理 Profiler 中识别高频、小 payload、暴露在 decode 关键路径上的 AllReduce 模式，并为 vLLM 配置、实现或评审 FlashInfer MNNVL AllReduce 显式优化，包括阈值、路由、安全回退和 A/B 验证。不要用于非 Hopper 平台、大 payload 主导或已经充分隐藏的通信。
+description: 从 NVIDIA Hopper 模型推理 Profiler 中识别高频、小 payload、暴露在 decode 关键路径上的 AllReduce 模式，并配置、实现或评审 FlashInfer MNNVL 显式优化，包括阈值分流、路由、安全回退和 A/B 验证。不要用于非 Hopper 平台、大 payload 主导或已经充分隐藏的通信。
 ---
 
 # Hopper FlashInfer AllReduce
@@ -30,25 +30,71 @@ description: 从 NVIDIA Hopper 模型推理 Profiler 中识别高频、小 paylo
 
 若硬条件不满足，输出“不匹配”及原因，转向 overlap、大消息通信、NCCL/拓扑、布局转换或其他优化，不要强行套用本规则。
 
-## 触发条件
+## 使用场景
 
-在以下任务中使用本 Skill：
+本 Skill 面向 **NVIDIA Hopper 节点内模型推理**：模型采用 tensor parallel 或 expert parallel，decode 循环中反复执行小 payload AllReduce，通信没有被计算充分隐藏，Profiler 显示其累积开销进入关键路径。此时目标不是提升大消息峰值带宽，而是用 FlashInfer MNNVL 降低高频小消息的固定延迟，并通过阈值保留其他 backend 的适用区间。
 
-- 优化或诊断 Hopper 上 vLLM TP/EP 模型的 decode AllReduce 热点；
-- 分析 Nsight Systems、Nsight Compute、PyTorch Profiler 或 Chrome trace 中高频小 AllReduce 模式；
-- 实现、迁移或评审 FlashInfer MNNVL AllReduce 路由；
-- 配置 `VLLM_ALLREDUCE_USE_FLASHINFER`、`VLLM_FLASHINFER_ALLREDUCE_BACKEND` 或 `fi_allreduce_fusion_max_size_mb`；
-- 复现 FlashInfer AllReduce 的单算子、Profiler 或端到端 A/B 效果；
-- 排查显式 FlashInfer 配置未生效、阈值不一致、float workspace/token 异常或 fallback 失效。
+### 场景一：从推理 Profiler 中发现通信热点
 
-不要用于 ROCm、非 Hopper GPU，或与 vLLM/FlashInfer AllReduce 无关的通用 Kernel 优化。
+当 Nsight Systems、Nsight Compute、PyTorch Profiler 或 Chrome trace 出现以下组合时使用：
+
+- 热点集中在 decode，而不是一次性 prefill；
+- 每个 decode step 都有一个或多个 AllReduce；
+- 单次通信很短，但调用次数多、累计时间或关键路径占比明显；
+- shape、dtype 和 payload 在多个 step 中相对稳定；
+- 通信 kernel 与前后计算近似串行，存在可回收的暴露时间。
+
+使用本 Skill 将 trace 特征归类为 `MATCH / PARTIAL_MATCH / NO_MATCH`，计算 payload 分布，判断是否值得引入小消息专用路径。
+
+### 场景二：显式启用了 FlashInfer，但 Profiler 看不到预期 kernel
+
+当配置显示已经选择 FlashInfer/MNNVL，而 eligible 的小张量仍全部进入通用 AllReduce 时使用。重点排查：配置是否在初始化前生效、fused 与 standalone 是否读取同一阈值、专用路径是否被更早的通用路由遮蔽。
+
+该场景的目标是修复“配置存在但路由未生效”，不是调整通信算法本身。
+
+### 场景三：为新推理框架迁移小消息 AllReduce 优化
+
+当代码库没有相同目录或类名，但存在 AllReduce 入口、backend 选择、workspace 初始化和 fallback 链路时使用。按容量计算、配置传播、资格判断、路由与回退四类职责映射经验，不复制历史文件布局。
+
+该场景的交付物应是框架无关的路由设计、当前代码库中的职责定位、边界测试和回退验证。
+
+### 场景四：根据真实 workload 选择或调整 payload 阈值
+
+当 candidate trace 同时存在 MNNVL 与其他 AllReduce kernel，或需要扩大/缩小专用路径覆盖范围时使用。按 payload 分桶比较各 backend 的单算子交叉点，再做端到端 paired A/B；不要仅凭 token 数或单个 shape 决定阈值。
+
+该场景的目标是形成“哪些消息走 MNNVL、哪些消息回退”的分流边界，而不是让所有 AllReduce 使用同一 backend。
+
+### 场景五：诊断阈值、workspace 或 fallback 正确性
+
+当小数 MiB 阈值引发类型/对齐错误、边界 shape 路由错误、不支持 dtype/device/布局进入专用路径，或者回退后结果异常时使用。重点验证单位转换的整数边界、eligibility 谓词和 fallback 语义。
+
+## 不适用场景
+
+以下情况不要使用本 Skill 作为主要优化方向：
+
+- 非 Hopper GPU、ROCm 或没有 FlashInfer MNNVL 能力的环境；
+- 热点是跨节点网络、NCCL 拓扑或网络带宽；
+- 大 payload、低调用次数的 prefill AllReduce 主导总耗时；
+- AllReduce 已与计算高度重叠，关键路径暴露时间很小；
+- 热点来自 ReduceScatter、AllGather、P2P、MoE dispatch/combine 等其他通信原语，且不存在可对应的小 AllReduce；
+- 张量长期不满足专用路径的 device、shape、dtype 或布局条件；
+- 端到端瓶颈明显位于计算、内存访问、调度或服务层，AllReduce 理论上限不足。
+
+这些场景应转向大消息算法、计算通信 overlap、拓扑/NCCL、布局转换或其他 Kernel 优化。
+
+## 适用边界
+
+- 优化对象是节点内、decode 高频小消息的 AllReduce 路由，不是通用集合通信库替换方案。
+- `2 MiB` 只是一组已有 workload 的候选起点；新 workload 必须从真实 payload 分布与 backend 交叉点重新确定。
+- 已观测的单算子和端到端效果只用于建立合理假设，不能直接外推到新的模型、并发、拓扑或软件版本。
+- 只有 Profiler 路由证据、正确性和交替 paired A/B 同时成立，才可接受为目标 workload 的显式优化。
 
 ## 前置条件
 
 - 目标硬件为 NVIDIA Hopper；原验证环境为单机 8×H200、TP8。
-- vLLM 构建包含 FlashInfer AllReduce，并支持 `mnnvl` backend。
-- 能取得目标 vLLM 源码、启动配置、模型 workload 和稳定的空闲 GPU。
-- 记录 GPU、驱动、CUDA、vLLM/FlashInfer 版本、commit、编译参数及拓扑。
+- 目标推理框架已集成或能够接入 FlashInfer AllReduce，并支持 `mnnvl` backend。
+- 能取得目标框架源码、启动配置、模型 workload 和稳定的空闲 GPU。
+- 记录 GPU、驱动、CUDA、推理框架/FlashInfer 版本、代码版本、编译参数及拓扑。
 - A/B 两侧必须使用同一代码基线、模型、请求集、并发、compilation config 和计时方法。
 
 ## 工作流程
@@ -59,23 +105,11 @@ description: 从 NVIDIA Hopper 模型推理 Profiler 中识别高频、小 paylo
 4. 形成假设。若命中，优先假设“高频小 AllReduce 的固定开销/路由成本过高”，再判断是阈值覆盖不足、显式配置未传播，还是 eligible 张量被更早的 fallback 路由消费。
 5. 检查实现不变量：
    - MiB 转 bytes 后显式保持整数；由 workspace、hidden size、element size 算出的 token 上限也必须是整数。
-   - standalone 从当前 `compilation_config.pass_config` 读取显式 `fi_allreduce_fusion_max_size_mb`，与 fusion 使用同一边界。
+   - fused 与 standalone AllReduce 从同一有效配置源读取 payload 上限，避免两条路径边界不一致。
    - FlashInfer eligibility 仅接受 CUDA、contiguous、二维、FP16/BF16/FP32 且 payload 不超过阈值的张量。
    - 显式启用且 eligible 的 FlashInfer 必须排在 symmetric-memory 之前；不支持或超阈值输入必须安全回退。
-6. 显式启用候选路径。启动服务前设置：
-
-   ```bash
-   export VLLM_ALLREDUCE_USE_FLASHINFER=1
-   export VLLM_FLASHINFER_ALLREDUCE_BACKEND=mnnvl
-   ```
-
-   并在 compilation config 中设置：
-
-   ```json
-   {"mode":0,"cudagraph_mode":"FULL_DECODE_ONLY","pass_config":{"fi_allreduce_fusion_max_size_mb":2}}
-   ```
-
-7. 做公平 A/B。baseline 只把 `VLLM_ALLREDUCE_USE_FLASHINFER` 设为 `0`；candidate 设为 `1`。两侧都保留相同 backend 与 payload pass config，控制唯一变量。
+6. 显式启用候选路径。找到当前框架实际生效的三个控制点：FlashInfer 开关、MNNVL backend 选择、payload 上限。必须在通信器或执行图初始化前注入，并从启动日志或运行时配置确认其值。
+7. 做公平 A/B。baseline 关闭 FlashInfer 路由，candidate 开启；两侧保持相同代码、backend 参数、payload 上限及其他运行配置，控制唯一变量。
 8. 分层验证：先跑静态/单元测试，再测 Profiler 中命中的真实 shape 单算子，再用 trace 证明路由，最后做端到端 ABBA 或交替顺序 paired A/B。
 9. 根据 paired 中位数、正收益比例、CV 与 Bootstrap 95% CI 决策。保留回退路径；只有目标机器和固定 workload 证据稳定时才部署。
 
@@ -83,7 +117,7 @@ description: 从 NVIDIA Hopper 模型推理 Profiler 中识别高频、小 paylo
 
 - **小消息选择专用路径**：decode 中 AllReduce payload 小、调用密集，固定启动、同步和调度开销占比高。FlashInfer MNNVL 针对节点内 NVLink/NVSwitch 小消息路径，可降低单次通信延迟；收益来自重复调用的累积。
 - **按 payload 分流**：用阈值只接管更适合 MNNVL 的小张量；大张量保留 symmetric-memory、custom AllReduce 或 PyNCCL，避免一个 backend 覆盖所有 shape。
-- **让配置贯穿 fusion 与 standalone**：同一阈值必须控制两条路径，否则 Profiler 中看似匹配的张量可能因边界不一致走错 backend。
+- **让配置贯穿 fusion 与 standalone**：同一阈值必须控制两条路径，否则 Profiler 中看似匹配的张量可能因配置传播断点走错 backend。
 - **显式路由优先**：用户 opt-in 后，eligible 张量必须在 symmetric-memory 之前判断，否则开关存在但 trace 不会出现 MNNVL kernel。
 - **不支持输入安全回退**：优化是局部分流，不改变非 CUDA、非 contiguous、非二维、不支持 dtype 或超阈值输入的语义和稳定性。
 
@@ -91,8 +125,8 @@ description: 从 NVIDIA Hopper 模型推理 Profiler 中识别高频、小 paylo
 
 - `2 MiB` 是 standalone/fusion FlashInfer 的最大 payload，不表示所有 AllReduce 都切换到 FlashInfer。
 - BF16、hidden size 7168 时，146 tokens 为 2,093,056 bytes，可进入 2 MiB 阈值；147 tokens 为 2,107,392 bytes，应回退。
-- `mode: 0` 只是显式 compilation/cudagraph/pass 配置，不是 FlashInfer 开关。
-- 路由顺序保持：ROCm QuickReduce → 显式且 eligible 的 FlashInfer → symmetric-memory → AITER/vLLM custom AllReduce → PyNCCL。
+- 编译模式、图捕获模式或 pass preset 通常不是 FlashInfer 路由开关；必须辨认当前框架真正控制 backend 选择的配置。
+- 路由原则保持：平台专用前置路径 → 显式且 eligible 的 FlashInfer → 通用节点内优化路径 → 框架自定义 AllReduce → 通用通信库。
 - 优先覆盖 decode 小张量；大 prefill 张量仍可能由 symmetric-memory 处理。
 - 单算子延迟改善不能直接换算为模型吞吐提升。
 
@@ -114,7 +148,7 @@ description: 从 NVIDIA Hopper 模型推理 Profiler 中识别高频、小 paylo
 
 ## 常见问题
 
-- 只设置环境变量但 MNNVL kernel 为 0：检查路由优先级、eligibility、初始化时机和 pass config 是否真正传到 standalone。
+- 配置显示已启用但 MNNVL kernel 为 0：检查路由优先级、eligibility、初始化时机，以及有效阈值是否传播到 standalone 路径。
 - 1.5 MiB 配置触发位运算类型错误：检查 bytes 与 max token 的每一步是否显式为整数。
 - candidate 仍出现大量 multimem kernel：先判断这些张量是否超阈值；不要误判为优化完全失效。
 - 端到端收益波动或反向：检查 GPU 是否被占用、服务启动顺序、异常停顿、请求完整性和顺序偏差；重新做干净的交替 paired 测试。
